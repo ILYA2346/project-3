@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Чат на веб-сокетах</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; display: flex; gap: 20px; }
+        #chat-container { flex: 1; max-width: 600px; }
+        #messages { list-style-type: none; margin: 0; padding: 0; border: 1px solid #ccc; height: 400px; overflow-y: scroll; padding: 10px; background: #f9f9f9; }
+        #messages li { padding: 5px 0; border-bottom: 1px solid #eee; word-wrap: break-word; }
+        .private-msg { background-color: #fff3cd; padding: 5px; border-radius: 4px; }
+        #form { background: #eee; padding: 10px; display: flex; gap: 10px; margin-top: 10px; }
+        #input { border: 1px solid #ccc; padding: 10px; flex: 1; border-radius: 4px; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        
+        #sidebar { width: 200px; border: 1px solid #ccc; padding: 10px; height: 400px; overflow-y: auto; background: #f1f1f1; }
+        #user-list { list-style: none; padding: 0; }
+        #user-list li { padding: 5px; cursor: pointer; border-bottom: 1px solid #ddd; }
+        #user-list li:hover { background: #ddd; }
+        .selected-user { background: #007bff !important; color: white; }
+        .system-msg { color: #888; font-style: italic; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+
+    <div id="sidebar">
+        <h3>Онлайн:</h3>
+        <ul id="user-list"></ul>
+        <button id="clear-private" style="display:none; margin-top:10px; background:#dc3545; width:100%;">Отменить выбор</button>
+    </div>
+
+    <!-- Основной чат -->
+    <div id="chat-container">
+        <ul id="messages"></ul>
+        <form id="form" action="">
+            <input id="input" autocomplete="off" placeholder="Введите сообщение..." />
+            <button>Отправить</button>
+        </form>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+
+        // Элементы DOM
+        const form = document.getElementById('form');
+        const input = document.getElementById('input');
+        const messages = document.getElementById('messages');
+        const userList = document.getElementById('user-list');
+        const clearPrivateBtn = document.getElementById('clear-private');
+
+        let currentUser = null;
+        let selectedSocketId = null; 
+
+        function initUser() {
+            const username = prompt('Введите ваше имя:');
+            if (!username) return initUser(); 
+
+            const color = prompt('Введите ваш любимый цвет (на английском, например: red, blue, #ff0000):', 'black');
+            
+            currentUser = username;
+            socket.emit('add user', { username, color: color || 'black' });
+        }
+
+        initUser(); 
+
+        form.addEventListener('submit', (e) => {
+            e.preventDefault();
+            if (input.value) {
+                if (selectedSocketId) {
+                    socket.emit('private message', { toSocketId: selectedSocketId, text: input.value });
+                } else {
+                    socket.emit('chat message', input.value);
+                }
+                input.value = '';
+            }
+        });
+
+        function appendMessage(item, name, color, text) {
+            const b = document.createElement('b');
+            b.style.color = color;
+            b.textContent = name;
+            item.append(b, ': ' + text);
+        }
+
+        socket.on('chat message', (data) => {
+            const item = document.createElement('li');
+            // Используем цвет пользователя
+            appendMessage(item, data.username, data.color, data.text);
+            messages.appendChild(item);
+            messages.scrollTop = messages.scrollHeight; // Прокрутка вниз
+        });
+
+        socket.on('private message', (data) => {
+            const item = document.createElement('li');
+            item.classList.add('private-msg');
+            appendMessage(item, `[Личное] ${data.username}`, data.color, data.text);
+            messages.appendChild(item);
+            messages.scrollTop = messages.scrollHeight;
+        });
+
+        socket.on('welcome', (msg) => {
+            const item = document.createElement('li');
+            item.classList.add('system-msg');
+            item.textContent = msg;
+            messages.appendChild(item);
+        });
+
+        socket.on('user joined', (username) => {
+            const item = document.createElement('li');
+            item.classList.add('system-msg');
+            item.textContent = `К нам присоединился ${username}`;
+            messages.appendChild(item);
+        });
+
+        socket.on('user left', (username) => {
+            const item = document.createElement('li');
+            item.classList.add('system-msg');
+            item.textContent = `${username} нас покинул.`;
+            messages.appendChild(item);
+        });
+
+        function resetSelection() {
+            selectedSocketId = null;
+            clearPrivateBtn.style.display = 'none';
+            input.placeholder = 'Введите сообщение...';
+        }
+
+        socket.on('user list', (users) => {
+            userList.innerHTML = '';
+
+            if (selectedSocketId && !users.some(u => u.socketId === selectedSocketId)) {
+                resetSelection();
+            }
+
+            users.forEach(user => {
+                if (user.socketId === socket.id) return;
+
+                const li = document.createElement('li');
+                li.textContent = user.username;
+                li.style.color = user.color;
+                if (user.socketId === selectedSocketId) li.classList.add('selected-user');
+
+                li.addEventListener('click', () => {
+                    document.querySelectorAll('#user-list li').forEach(el => el.classList.remove('selected-user'));
+
+                    if (selectedSocketId === user.socketId) {
+                        resetSelection(); 
+                    } else {
+                        selectedSocketId = user.socketId;
+                        li.classList.add('selected-user');
+                        clearPrivateBtn.style.display = 'block';
+                        input.placeholder = `Личное сообщение для ${user.username}...`;
+                    }
+                });
+
+                userList.appendChild(li);
+            });
+        });
+
+        clearPrivateBtn.addEventListener('click', () => {
+            document.querySelectorAll('#user-list li').forEach(el => el.classList.remove('selected-user'));
+            resetSelection();
+        });
+
+    </script>
+</body>
+</html>
